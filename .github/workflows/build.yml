@@ -1,0 +1,105 @@
+name: Build, Test and Release
+
+on:
+  push:
+    tags: [ "*" ]
+    branches: [ "main" ]
+
+permissions: read-all
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 16
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            .github/actions/setup-protoc-env/package-lock.json
+
+      - uses: arduino/setup-protoc@v1
+
+      - run: npm ci --omit=dev
+        working-directory: .github/actions/setup-protoc-env
+
+      - name: Setup protoc environment
+        uses: ./.github/actions/setup-protoc-env
+
+      - uses: bazelbuild/setup-bazelisk@v2
+
+      - run: npm ci
+
+      - run: npm run test
+
+      - run: npm run build
+
+      - uses: actions/upload-artifact@v2
+        with:
+          name: js
+          path: |
+            google-protobuf.js
+            google
+
+  package:
+
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        os: [ ubuntu-latest ]
+        bazel_target: [ dist_all ]
+        cpu:
+          - x86_64
+          - systemz
+          - aarch64
+          - ppc64
+      include:
+        - os: macos-latest
+          cpu: darwin_arm64
+        - os: macos-latest
+          cpu: darwin_aarch64
+        - os: windows-latest
+          cpu: x64_windows
+          bazel_target: dist_zip
+        - os: windows-latest
+          cpu: x64_x86_windows
+          bazel_target: dist_zip
+        - os: ubuntu-latest
+          cpu: x86_32
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/download-artifact@v2
+        with:
+          name: js
+
+      - uses: bazelbuild/setup-bazelisk@v2
+
+      - run: bazel build --cpu=${{ matrix.cpu }} ${{ matrix.bazel_target }}
+        shell: bash
+
+      - uses: actions/upload-artifact@v2
+        with:
+          name: releases
+          path: bazel-bin/protobuf-javascript-*.*
+
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v2
+        with:
+          name: releases
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: bazel-bin/*
